@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=RSCashM
+Comment=Rust Cash Manager
+Exec=/home/syscall/.cargo/bin/rscashm
+Icon=rscashm
+Terminal=false
+Type=Application
+Categories=Utility;

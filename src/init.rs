@@ -1,7 +1,7 @@
-// This Rust program implements a personal finance manager using the egui GUI framework.
-// It allows users to record income and expense transactions, view a summary,
-// search through entries, and persist data to a binary file.
-// The application remembers the last used file path across sessions.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
