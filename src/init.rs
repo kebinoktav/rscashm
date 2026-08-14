@@ -2,7 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -92,14 +91,14 @@ fn load_config_path() -> Option<PathBuf> {
 /// It holds the ledger, the active file path, input fields, search query,
 /// a confirmation flag for clearing all data, and a status message.
 pub struct RsCashM {
-    book: Ledger,                       // All transactions
-    file_path: PathBuf,                 // Current file used for save/load
-    input_name: String,                 // Transaction name input
-    input_amount: String,               // Amount input (text)
-    input_type: String,                 // "Income" or "Expense"
-    input_category: String,             // Category input
-    search_query: String,               // Filter text for transaction list
-    confirm_clear: bool,                // Toggle for clear confirmation
+    book: Ledger,                                    // All transactions
+    file_path: PathBuf,                              // Current file used for save/load
+    input_name: String,                              // Transaction name input
+    input_amount: String,                            // Amount input (text)
+    input_type: String,                              // "Income" or "Expense"
+    input_category: String,                          // Category input
+    search_query: String,                            // Filter text for transaction list
+    confirm_clear: bool,                             // Toggle for clear confirmation
     status_message: Option<(String, egui::Color32)>, // (message, color)
 }
 
@@ -233,7 +232,26 @@ impl RsCashM {
             match Ledger::load_from_file(&self.file_path) {
                 Ok(ledger) => {
                     self.book = ledger;
-                    self.status_message = Some(("File loaded".to_string(), egui::Color32::GREEN));
+                    self.status_message = Some(("File Loaded".to_string(), egui::Color32::GREEN));
+                }
+                Err(e) => {
+                    self.book = Ledger::default();
+                    self.status_message = Some((
+                        format!("New file: {}", e),
+                        egui::Color32::from_rgb(200, 150, 0),
+                    ));
+                }
+            }
+        }
+    }
+    fn load_from_selected_file(&mut self) {
+        if let Some(file) = rfd::FileDialog::new().pick_file() {
+            match Ledger::load_from_file(&file) {
+                Ok(ledger) => {
+                    self.file_path = file;
+                    self.book = ledger;
+                    save_cfg_path(&self.file_path);
+                    self.status_message = Some(("File Loaded".to_string(), egui::Color32::GREEN))
                 }
                 Err(e) => {
                     self.book = Ledger::default();
@@ -292,8 +310,12 @@ impl eframe::App for RsCashM {
 
                     ui.separator();
 
-                    if ui.button("Select Save Folder").clicked() {
+                    if ui.button("Select Folder").clicked() {
                         self.load_from_selected_folder();
+                    }
+
+                    if ui.button("Select File").clicked() {
+                        self.load_from_selected_file();
                     }
                 });
             });
@@ -355,7 +377,9 @@ impl eframe::App for RsCashM {
                         });
                         // Net Balance
                         cols[2].vertical_centered(|ui| {
-                            ui.label(egui::RichText::new("Net Balance").color(egui::Color32::YELLOW));
+                            ui.label(
+                                egui::RichText::new("Net Balance").color(egui::Color32::YELLOW),
+                            );
                             let color = if net >= 0 {
                                 egui::Color32::GREEN
                             } else {
