@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use cryptainer::Cryptainer;
 use serde::{Deserialize, Serialize};
 
 // One income or expense saved in the ledger.
@@ -23,7 +24,7 @@ pub(crate) struct Data {
 }
 
 // All transaction rows stored in one data file.
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, Cryptainer)]
 pub(crate) struct VData {
     // The full list of saved transactions.
     pub(crate) v_data: Vec<Data>,
@@ -48,6 +49,12 @@ pub(crate) struct RScashM {
     pub(crate) d_ui_currency: String,
     // Date currently typed into the form.
     pub(crate) d_ui_date: String,
+    #[serde(skip)]
+    pub(crate) encryption_password: String,
+    #[serde(skip)]
+    pub(crate) is_encrypted: bool,
+    #[serde(skip)]
+    pub(crate) encryption_unlocked: bool,
     // Startup read state; kept in memory only.
     #[serde(skip)]
     pub(crate) read_state: FileReadLoop,
@@ -191,6 +198,9 @@ pub(crate) enum Message {
     RemoveData(usize),
     // Remove every transaction.
     RemoveAllData,
+    EncryptionPasswordChanged(String),
+    CheckEncryption,
+    ApplyEncryption,
     // Update the transaction name input.
     NameChanged(String),
     // Update the transaction amount input.

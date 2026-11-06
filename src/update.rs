@@ -31,12 +31,44 @@ impl RScashM {
                 Task::none()
             }
             Message::TransmitData => {
-                self.add_transaction();
+                if self.is_encrypted
+                    && (!self.encryption_unlocked || self.encryption_password.is_empty())
+                {
+                    self.status = if self.encryption_unlocked {
+                        "Enter a password before editing encrypted data".to_string()
+                    } else {
+                        "Unlock the encrypted data file before editing it".to_string()
+                    };
+                } else {
+                    self.add_transaction();
+                }
                 Task::none()
             }
             Message::RemoveData(index) => {
                 // Remove the selected row and save the updated ledger.
-                self.clear_transaction(index);
+                if self.is_encrypted
+                    && (!self.encryption_unlocked || self.encryption_password.is_empty())
+                {
+                    self.status = if self.encryption_unlocked {
+                        "Enter a password before editing encrypted data".to_string()
+                    } else {
+                        "Unlock the encrypted data file before editing it".to_string()
+                    };
+                } else {
+                    self.clear_transaction(index);
+                }
+                Task::none()
+            }
+            Message::EncryptionPasswordChanged(password) => {
+                self.encryption_password = password;
+                Task::none()
+            }
+            Message::CheckEncryption => {
+                self.check_encryption();
+                Task::none()
+            }
+            Message::ApplyEncryption => {
+                self.apply_encryption();
                 Task::none()
             }
             Message::FileReadTick => {
@@ -103,7 +135,17 @@ impl RScashM {
                 Task::none()
             }
             Message::RemoveAllData => {
-                self.clear_all_transactions();
+                if self.is_encrypted
+                    && (!self.encryption_unlocked || self.encryption_password.is_empty())
+                {
+                    self.status = if self.encryption_unlocked {
+                        "Enter a password before editing encrypted data".to_string()
+                    } else {
+                        "Unlock the encrypted data file before editing it".to_string()
+                    };
+                } else {
+                    self.clear_all_transactions();
+                }
                 Task::none()
             }
         }

@@ -1,6 +1,6 @@
 [package]
 name = "rscashm"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 
 [dependencies]
@@ -11,6 +11,8 @@ bincode = { version = "2.0.1", features = ["serde"] }
 rfd = "0.17.2"
 iced = { version = "0.14.0", features = ["tokio", "image"] }
 serde_json = "1.0"
+cryptainer = { version = "2.3", features = ["derive"] }
+rand = "0.10"
 
 [profile.release]
 opt-level = 2       # optimization for speed and still has more small binary than opt-3

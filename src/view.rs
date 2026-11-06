@@ -667,28 +667,39 @@ impl RScashM {
             list = list.push(row_item);
         }
 
-        // The history header includes Remove All and an empty-state hint when needed.
-        let history_header = if self.data.v_data.is_empty() {
-            column![
-                row![
-                    text("Transaction History").size(20).color(colors.text),
-                    Space::new().width(Length::Fill),
-                    button(text("Remove All").color(colors.text)).on_press(Message::RemoveAllData)
-                ]
-                .width(iced::Length::Fill),
-                text("No transactions yet").size(13).color(colors.muted),
-            ]
+        let encryption_status = match (self.is_encrypted, self.encryption_unlocked) {
+            (true, true) => "Encrypted / unlocked",
+            (true, false) => "Encrypted / locked",
+            (false, _) => "Plaintext",
+        };
+        let encryption_action = if self.is_encrypted && !self.encryption_unlocked {
+            "Unlock"
+        } else if self.is_encrypted {
+            "Re-encrypt"
         } else {
-            column![
-                row![
-                    text("Transaction History").size(20).color(colors.text),
-                    Space::new().width(Length::Fill),
-                    button(text("Remove All").color(colors.text)).on_press(Message::RemoveAllData)
-                ]
-                .width(iced::Length::Fill)
+            "Encrypt"
+        };
+        let mut history_header = column![
+            row![text("Transaction History").size(20).color(colors.text)].width(Length::Fill),
+            row![
+                text(encryption_status).size(12).color(colors.muted),
+                text_input("Password", &self.encryption_password)
+                    .secure(true)
+                    .on_input(Message::EncryptionPasswordChanged)
+                    .width(Length::Fill),
+                button(text("Check").color(colors.text)).on_press(Message::CheckEncryption),
+                button(text(encryption_action).color(colors.text))
+                    .on_press(Message::ApplyEncryption),
+                button(text("Remove All").color(colors.text)).on_press(Message::RemoveAllData),
             ]
-        }
+            .spacing(8)
+            .align_y(Alignment::Center),
+        ]
         .spacing(8);
+        if self.data.v_data.is_empty() {
+            history_header =
+                history_header.push(text("No transactions yet").size(13).color(colors.muted));
+        }
 
         // Keep the summary fixed while the transaction list scrolls.
         let history = scrollable(list).width(Length::Fill).height(Length::Fill);

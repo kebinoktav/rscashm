@@ -147,6 +147,23 @@ impl VData {
             .map_err(|e| format!("Failed to decode Bincode: {}", e))?;
         Ok(data)
     }
+
+    fn file_is_encrypted(path: &Path) -> bool {
+        if Self::load_from_file(path).is_ok() {
+            return false;
+        }
+        fs::read(path)
+            .map(|content| cryptainer::CryptData::from_bytes(&content).is_ok())
+            .unwrap_or(false)
+    }
+
+    fn save_encrypted_to_file(&self, path: &Path, password: &str) -> Result<(), String> {
+        let mut rng = rand::rng();
+        let encrypted = self
+            .encrypt(password, &mut rng)
+            .map_err(|error| format!("Encryption failed: {error}"))?;
+        fs::write(path, encrypted.to_bytes()).map_err(|error| format!("Save error: {error}"))
+    }
 }
 
 impl RScashM {
@@ -176,11 +193,12 @@ impl RScashM {
             .unwrap_or_else(|| RgbColor::default_text(app_theme))
             .channels()
             .map(|channel| channel.to_string());
-        let d = match VData::load_from_file(&p) {
-            Ok(k) => k,
-            Err(e) => {
-                eprintln!("warning initial load: {}", e);
-                VData::default()
+        let (d, is_encrypted) = match VData::load_from_file(&p) {
+            Ok(data) => (data, false),
+            Err(_) if VData::file_is_encrypted(&p) => (VData::default(), true),
+            Err(error) => {
+                eprintln!("warning initial load: {}", error);
+                (VData::default(), false)
             }
         };
         RScashM {
@@ -192,8 +210,15 @@ impl RScashM {
             d_ui_type: String::new(),
             d_ui_currency: String::new(),
             d_ui_date: String::new(),
+            encryption_password: String::new(),
+            is_encrypted,
+            encryption_unlocked: !is_encrypted,
             // Start checking for the ledger file after launch.
-            read_state: FileReadLoop::Waiting,
+            read_state: if is_encrypted {
+                FileReadLoop::Loaded(VData::default())
+            } else {
+                FileReadLoop::Waiting
+            },
             // Keep the balance view on USD until another currency is picked.
             balance_currency: "USD".to_string(),
             show_settings_panel: false,
@@ -214,9 +239,85 @@ impl RScashM {
 
     // Save the current ledger to its active file.
     pub(crate) fn save(&mut self) -> Result<(), String> {
+        if self.is_encrypted && !self.encryption_unlocked {
+            return Err("Unlock the encrypted data file before editing it".to_string());
+        }
+        if self.is_encrypted {
+            if self.encryption_password.is_empty() {
+                return Err("Enter a password before saving encrypted data".to_string());
+            }
+            return self
+                .data
+                .save_encrypted_to_file(&self.path, &self.encryption_password);
+        }
         self.data
             .save_to_file(&self.path)
             .map_err(|e| format!("Save error: {}", e))
+    }
+
+    pub(crate) fn check_encryption(&mut self) {
+        match VData::load_from_file(&self.path) {
+            Ok(data) => {
+                self.data = data.clone();
+                self.is_encrypted = false;
+                self.encryption_unlocked = true;
+                self.encryption_password.clear();
+                self.read_state = FileReadLoop::Loaded(data);
+                self.status = "Data file is not encrypted".to_string();
+            }
+            Err(_) if VData::file_is_encrypted(&self.path) => {
+                if !self.is_encrypted {
+                    self.encryption_unlocked = false;
+                }
+                self.is_encrypted = true;
+                self.read_state = FileReadLoop::Loaded(self.data.clone());
+                self.status = if self.encryption_unlocked {
+                    "Data file is encrypted and unlocked".to_string()
+                } else {
+                    "Encrypted data detected. Enter its password and choose Unlock".to_string()
+                };
+            }
+            Err(error) => self.status = format!("Couldn't identify data file: {error}"),
+        }
+    }
+
+    pub(crate) fn apply_encryption(&mut self) {
+        if self.encryption_password.is_empty() {
+            self.status = "Enter a password first".to_string();
+            return;
+        }
+
+        if self.is_encrypted && !self.encryption_unlocked {
+            let content = match fs::read(&self.path) {
+                Ok(content) => content,
+                Err(error) => {
+                    self.status = format!("Couldn't read encrypted data: {error}");
+                    return;
+                }
+            };
+            match VData::decrypt_bytes(&content, &self.encryption_password) {
+                Ok(data) => {
+                    self.data = data;
+                    self.encryption_unlocked = true;
+                    self.read_state = FileReadLoop::Loaded(self.data.clone());
+                    self.status = "Encrypted data unlocked".to_string();
+                }
+                Err(error) => self.status = format!("Couldn't unlock data: {error}"),
+            }
+            return;
+        }
+
+        match self
+            .data
+            .save_encrypted_to_file(&self.path, &self.encryption_password)
+        {
+            Ok(()) => {
+                self.is_encrypted = true;
+                self.encryption_unlocked = true;
+                self.status = "Data encrypted".to_string();
+            }
+            Err(error) => self.status = error,
+        }
     }
 
     // Apply a built-in palette and save the user's choice.
@@ -359,9 +460,25 @@ impl RScashM {
             Ok(data) => {
                 self.data = data.clone();
                 self.path = path.clone();
+                self.is_encrypted = false;
+                self.encryption_unlocked = true;
+                self.encryption_password.clear();
                 self.read_state = FileReadLoop::Loaded(data);
                 self.status = match save_ledger_path(&path) {
                     Ok(()) => "File selected".to_string(),
+                    Err(error) => error,
+                };
+            }
+            Err(_) if VData::file_is_encrypted(&path) => {
+                self.path = path.clone();
+                self.data = VData::default();
+                self.is_encrypted = true;
+                self.encryption_unlocked = false;
+                self.read_state = FileReadLoop::Loaded(VData::default());
+                self.status = match save_ledger_path(&path) {
+                    Ok(()) => {
+                        "Encrypted data detected. Enter its password and choose Unlock".to_string()
+                    }
                     Err(error) => error,
                 };
             }
@@ -373,6 +490,11 @@ impl RScashM {
 
     // Use a folder's d_f.bin file, creating it from the current ledger if needed.
     pub(crate) fn select_data_folder(&mut self) {
+        if self.is_encrypted && (!self.encryption_unlocked || self.encryption_password.is_empty()) {
+            self.status =
+                "Unlock encrypted data and enter its password before changing folders".to_string();
+            return;
+        }
         let initial_folder = self
             .path
             .parent()
@@ -393,13 +515,27 @@ impl RScashM {
         let new_data = if new_path.exists() {
             match VData::load_from_file(&new_path) {
                 Ok(data) => data,
+                Err(_) if VData::file_is_encrypted(&new_path) => {
+                    self.status =
+                        "The folder contains encrypted data; select that file to unlock it"
+                            .to_string();
+                    return;
+                }
                 Err(error) => {
                     self.status = format!("Couldn't load {}: {error}", new_path.display());
                     return;
                 }
             }
         } else {
-            if let Err(error) = self.data.save_to_file(&new_path) {
+            let save_result = if self.is_encrypted {
+                self.data
+                    .save_encrypted_to_file(&new_path, &self.encryption_password)
+            } else {
+                self.data
+                    .save_to_file(&new_path)
+                    .map_err(|error| format!("Save error: {error}"))
+            };
+            if let Err(error) = save_result {
                 self.status = format!("Couldn't save {}: {error}", new_path.display());
                 return;
             }
@@ -512,8 +648,17 @@ impl RScashM {
         match VData::load_from_file(&self.path) {
             Ok(data) => {
                 self.data = data.clone();
+                self.is_encrypted = false;
+                self.encryption_unlocked = true;
                 self.read_state = FileReadLoop::Loaded(data);
                 self.status = "File loaded".to_string();
+            }
+            Err(_) if VData::file_is_encrypted(&self.path) => {
+                self.is_encrypted = true;
+                self.encryption_unlocked = false;
+                self.read_state = FileReadLoop::Loaded(self.data.clone());
+                self.status =
+                    "Encrypted data detected. Enter its password and choose Unlock".to_string();
             }
             Err(e) => {
                 self.status = format!("Waiting for file... ({e})");
@@ -530,7 +675,7 @@ mod tests {
         to_currency,
     };
     use crate::data::Currency;
-    use crate::data::{AppConfig, AppTheme, AppearanceSettings, RgbColor, VData};
+    use crate::data::{AppConfig, AppTheme, AppearanceSettings, Data, RgbColor, VData};
 
     #[test]
     fn app_config_round_trips_as_one_json_document() {
@@ -629,6 +774,55 @@ mod tests {
 
             assert!(result.unwrap().v_data.is_empty());
         }
+    }
+
+    #[test]
+    fn encrypted_ledger_round_trips_and_rejects_wrong_password() {
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "rscashm-encrypted-{}-{unique_id}.bin",
+            std::process::id()
+        ));
+        let data = VData {
+            v_data: vec![Data::default()],
+        };
+
+        data.save_encrypted_to_file(&path, "correct horse battery staple")
+            .unwrap();
+        assert!(VData::file_is_encrypted(&path));
+        assert!(VData::load_from_file(&path).is_err());
+
+        let content = std::fs::read(&path).unwrap();
+        let decrypted = VData::decrypt_bytes(&content, "correct horse battery staple").unwrap();
+        assert_eq!(decrypted.v_data.len(), 1);
+        assert!(VData::decrypt_bytes(&content, "wrong password").is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn long_plaintext_ledger_is_not_detected_as_encrypted() {
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "rscashm-plaintext-{}-{unique_id}.bin",
+            std::process::id()
+        ));
+        let data = VData {
+            v_data: vec![Data {
+                d_name: "A long transaction name ".repeat(4),
+                ..Data::default()
+            }],
+        };
+
+        data.save_to_file(&path).unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() >= 44);
+        assert!(!VData::file_is_encrypted(&path));
+        std::fs::remove_file(path).unwrap();
     }
 
     // Parse grouped whole numbers without using floating-point values.
