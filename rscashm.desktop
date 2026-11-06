@@ -1,8 +1,12 @@
 [Desktop Entry]
-Name=RSCashM
-Comment=Rust Cash Manager
-Exec=/home/syscall/.cargo/bin/rscashm
+Version=1.0
+Type=Application
+Name=RScashm
+GenericName=Personal Finance Tracker
+Comment=Track income, expenses, and balances
+Exec=rscashm
+TryExec=rscashm
 Icon=rscashm
 Terminal=false
-Type=Application
-Categories=Utility;
+Categories=Office;Finance;
+StartupWMClass=rscashm

@@ -1,19 +1,20 @@
 [package]
 name = "rscashm"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 
 [dependencies]
-eframe = "0.29.0"  # Framework for egui
 env_logger = "0.11.0"
 serde = { version = "1.0.229", features = ["derive"] }
 chrono = "0.4.45"
 bincode = { version = "2.0.1", features = ["serde"] }
 rfd = "0.17.2"
+iced = { version = "0.14.0", features = ["tokio", "image"] }
+serde_json = "1.0"
 
 [profile.release]
-opt-level = 3       # Maximum optimization for speed
-lto = "fat"         # Link Time Optimization across all crates
+opt-level = 2       # optimization for speed and still has more small binary than opt-3
+lto = "thin"         # Link Time Optimization across all crates
 codegen-units = 1   # Slower compile, but better runtime optimization
 panic = "abort"     # Removes unwinding code to reduce binary size
 strip = true        # Removes debug symbols from the binary

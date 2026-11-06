@@ -11,10 +11,10 @@ The goal is simple: **record your money, see your transactions, and keep track o
 
 ## Features
 
-* Simple graphical interface using `eframe` and `egui`
+* Simple graphical interface using `iced`
 * Track income and expenses
-* Local data storage
-* Binary data storage using `bincode`
+* Ledger data stored in binary files using `bincode`
+* Theme, selected ledger, custom colors, and wallpaper stored together in `config.json`
 * File selection using `rfd`
 * Data serialization using `serde`
 * Written entirely in Rust
@@ -38,9 +38,10 @@ RSCashM aims to keep that process simple.
 
 | Purpose       | Crate            |
 | ------------- | ---------------- |
-| GUI           | `eframe`, `egui` |
+| GUI           | `iced`           |
 | Serialization | `serde`          |
-| Data Storage  | `bincode`        |
+| Ledger data   | `bincode`        |
+| Settings      | `serde_json`     |
 | File Dialog   | `rfd`            |
 
 ## Requirements
@@ -97,14 +98,20 @@ target/release/rscashm
 Run directly:
 
 ```bash
-./target/release/rscashm
+./target/release/rscashm-iced
 ```
 
-Or install manually:
+Install the application and its desktop entry with the bundled icon:
 
 ```bash
-sudo install target/release/rscashm /usr/bin/rscashm
+./install.sh
 ```
+
+The installer builds the release binary and installs it under `~/.local` by default, so a normal user installation does not need `sudo`. It uses the repository's `rscashm.png` icon automatically. Set `PREFIX=/usr/local` to install system-wide (the script uses `sudo` if needed), or pass `--icon /path/to/icon.png` to choose another PNG. Remove the installed files with `./uninstall.sh`; use the same `PREFIX` value for a system-wide installation.
+
+The installer also creates a desktop entry whose launcher and icon paths match the selected `PREFIX`, so it works even when the desktop session does not include `~/.local/bin` in `PATH`. No username is hardcoded: each user launches the same installed program with their own `$HOME` and `${XDG_DATA_HOME:-~/.local/share}` data directory. It requires Bash, Cargo, and standard Linux `install` utilities; `update-desktop-database` is optional, so the script works on Arch Linux and other common Linux distributions.
+
+When launched from the desktop entry, `config.json` is stored in `${XDG_DATA_HOME:-~/.local/share}/rscashm/`. It contains the selected ledger path, theme, custom colors, and wallpaper path. Ledger transaction files remain separate `.bin` files. Existing `cfg.txt`, `theme.txt`, and `appearance.json` settings are read as a fallback and then saved to `config.json`.
 
 ## Current Status
 
