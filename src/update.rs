@@ -71,6 +71,10 @@ impl RScashM {
                 self.apply_encryption();
                 Task::none()
             }
+            Message::LockEncryption => {
+                self.lock_encryption();
+                Task::none()
+            }
             Message::FileReadTick => {
                 // Retry the startup read while the ledger is unavailable.
                 self.poll_file_read();

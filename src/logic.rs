@@ -2,15 +2,65 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::data::{
     AppConfig, AppTheme, ColorChannel, ColorTarget, Currency, Data, FileReadLoop, RScashM,
     RgbColor, VData,
 };
+use zeroize::Zeroize;
 
 const CONFIG_PATH: &str = "config.json";
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn write_file_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Missing file name"))?;
+    let (temporary_path, mut temporary_file) = loop {
+        let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temporary_name = format!(
+            ".{}.{}.{}.tmp",
+            file_name.to_string_lossy(),
+            std::process::id(),
+            sequence
+        );
+        let candidate = parent.join(temporary_name);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&candidate) {
+            Ok(file) => break (candidate, file),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    };
+
+    let write_result = temporary_file
+        .write_all(contents)
+        .and_then(|()| temporary_file.sync_all());
+    drop(temporary_file);
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&temporary_path, path) {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(error);
+    }
+    fs::File::open(parent)?.sync_all()
+}
 
 // Add comma separators without changing the amount's sign.
 pub(crate) fn int_to_text(amount: i128) -> String {
@@ -115,7 +165,8 @@ fn load_app_config() -> AppConfig {
 fn write_app_config(config: &AppConfig) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(config)
         .map_err(|error| format!("Couldn't encode config.json: {error}"))?;
-    fs::write(CONFIG_PATH, bytes).map_err(|error| format!("Couldn't save config.json: {error}"))
+    write_file_atomically(Path::new(CONFIG_PATH), &bytes)
+        .map_err(|error| format!("Couldn't save config.json: {error}"))
 }
 
 // Accept only whole numbers that fit in one RGB channel.
@@ -133,7 +184,7 @@ impl VData {
     pub fn save_to_file(&self, path: &Path) -> Result<(), std::io::Error> {
         let config = bincode::config::standard();
         let data = bincode::serde::encode_to_vec(self, config).map_err(std::io::Error::other)?;
-        fs::write(path, data)
+        write_file_atomically(path, &data)
     }
 
     // Read a ledger file; blank files count as an empty ledger.
@@ -162,7 +213,8 @@ impl VData {
         let encrypted = self
             .encrypt(password, &mut rng)
             .map_err(|error| format!("Encryption failed: {error}"))?;
-        fs::write(path, encrypted.to_bytes()).map_err(|error| format!("Save error: {error}"))
+        write_file_atomically(path, &encrypted.to_bytes())
+            .map_err(|error| format!("Save error: {error}"))
     }
 }
 
@@ -210,7 +262,7 @@ impl RScashM {
             d_ui_type: String::new(),
             d_ui_currency: String::new(),
             d_ui_date: String::new(),
-            encryption_password: String::new(),
+            encryption_password: Default::default(),
             is_encrypted,
             encryption_unlocked: !is_encrypted,
             // Start checking for the ledger file after launch.
@@ -258,19 +310,25 @@ impl RScashM {
     pub(crate) fn check_encryption(&mut self) {
         match VData::load_from_file(&self.path) {
             Ok(data) => {
+                self.wipe_ledger_data();
                 self.data = data.clone();
                 self.is_encrypted = false;
                 self.encryption_unlocked = true;
-                self.encryption_password.clear();
+                self.encryption_password.zeroize();
                 self.read_state = FileReadLoop::Loaded(data);
                 self.status = "Data file is not encrypted".to_string();
             }
             Err(_) if VData::file_is_encrypted(&self.path) => {
                 if !self.is_encrypted {
+                    self.wipe_ledger_data();
                     self.encryption_unlocked = false;
                 }
                 self.is_encrypted = true;
-                self.read_state = FileReadLoop::Loaded(self.data.clone());
+                if self.encryption_unlocked {
+                    self.read_state = FileReadLoop::Loaded(self.data.clone());
+                } else {
+                    self.read_state = FileReadLoop::Loaded(VData::default());
+                }
                 self.status = if self.encryption_unlocked {
                     "Data file is encrypted and unlocked".to_string()
                 } else {
@@ -317,6 +375,24 @@ impl RScashM {
                 self.status = "Data encrypted".to_string();
             }
             Err(error) => self.status = error,
+        }
+    }
+
+    pub(crate) fn lock_encryption(&mut self) {
+        if !self.is_encrypted || !self.encryption_unlocked {
+            return;
+        }
+        self.wipe_ledger_data();
+        self.encryption_password.zeroize();
+        self.encryption_unlocked = false;
+        self.read_state = FileReadLoop::Loaded(VData::default());
+        self.status = "Encrypted data locked".to_string();
+    }
+
+    fn wipe_ledger_data(&mut self) {
+        self.data.zeroize_contents();
+        if let FileReadLoop::Loaded(data) = &mut self.read_state {
+            data.zeroize_contents();
         }
     }
 
@@ -458,11 +534,12 @@ impl RScashM {
 
         match VData::load_from_file(&path) {
             Ok(data) => {
+                self.wipe_ledger_data();
                 self.data = data.clone();
                 self.path = path.clone();
                 self.is_encrypted = false;
                 self.encryption_unlocked = true;
-                self.encryption_password.clear();
+                self.encryption_password.zeroize();
                 self.read_state = FileReadLoop::Loaded(data);
                 self.status = match save_ledger_path(&path) {
                     Ok(()) => "File selected".to_string(),
@@ -470,6 +547,8 @@ impl RScashM {
                 };
             }
             Err(_) if VData::file_is_encrypted(&path) => {
+                self.wipe_ledger_data();
+                self.encryption_password.zeroize();
                 self.path = path.clone();
                 self.data = VData::default();
                 self.is_encrypted = true;
@@ -547,6 +626,7 @@ impl RScashM {
             return;
         }
 
+        self.wipe_ledger_data();
         self.path = new_path;
         self.data = new_data.clone();
         self.read_state = FileReadLoop::Loaded(new_data);
@@ -672,10 +752,73 @@ impl RScashM {
 mod tests {
     use super::{
         AmountError, int_to_text, normalize_transaction_type, parse_amount, parse_rgb_value,
-        to_currency,
+        to_currency, write_file_atomically,
     };
     use crate::data::Currency;
-    use crate::data::{AppConfig, AppTheme, AppearanceSettings, Data, RgbColor, VData};
+    use crate::data::{
+        AppConfig, AppTheme, AppearanceSettings, Data, FileReadLoop, RScashM, RgbColor, VData,
+    };
+    use zeroize::Zeroizing;
+
+    #[test]
+    fn atomic_write_replaces_existing_file() {
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "rscashm-atomic-{}-{unique_id}.bin",
+            std::process::id()
+        ));
+
+        std::fs::write(&path, b"old ledger").unwrap();
+        write_file_atomically(&path, b"new ledger").unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"new ledger");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn locking_clears_ledger_copies_and_password() {
+        let ledger = VData {
+            v_data: vec![Data {
+                d_name: "private entry".to_string(),
+                d_type: "INCOME".to_string(),
+                d_amount: 42,
+                d_currency: Currency::USD,
+                d_date: "today".to_string(),
+            }],
+        };
+        let mut state = RScashM {
+            data: ledger.clone(),
+            path: std::path::PathBuf::new(),
+            status: String::new(),
+            d_ui_amount: String::new(),
+            d_ui_name: String::new(),
+            d_ui_type: String::new(),
+            d_ui_currency: String::new(),
+            d_ui_date: String::new(),
+            encryption_password: Zeroizing::new("secret".to_string()),
+            is_encrypted: true,
+            encryption_unlocked: true,
+            read_state: FileReadLoop::Loaded(ledger),
+            balance_currency: "USD".to_string(),
+            show_settings_panel: false,
+            app_theme: AppTheme::Dark,
+            appearance: AppearanceSettings::default(),
+            background_rgb_inputs: std::array::from_fn(|_| "0".to_string()),
+            text_rgb_inputs: std::array::from_fn(|_| "255".to_string()),
+        };
+
+        state.lock_encryption();
+
+        assert!(state.data.v_data.is_empty());
+        assert!(state.encryption_password.is_empty());
+        assert!(!state.encryption_unlocked);
+        assert!(
+            matches!(state.read_state, FileReadLoop::Loaded(ref data) if data.v_data.is_empty())
+        );
+    }
 
     #[test]
     fn app_config_round_trips_as_one_json_document() {

@@ -3600,6 +3600,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "zeroize",
 ]
 
 [[package]]

@@ -10,6 +10,7 @@ use iced::{
         Space, button, column, container, image, pick_list, row, scrollable, text, text_input,
     },
 };
+use zeroize::Zeroizing;
 
 // Share one currency list between the form and balance mode.
 pub const CURRENCIES: &[&str] = &[
@@ -679,17 +680,27 @@ impl RScashM {
         } else {
             "Encrypt"
         };
+        let lock_button: Element<'_, Message> = if self.is_encrypted && self.encryption_unlocked {
+            button(text("Lock"))
+                .on_press(Message::LockEncryption)
+                .into()
+        } else {
+            Space::new().into()
+        };
         let mut history_header = column![
             row![text("Transaction History").size(20).color(colors.text)].width(Length::Fill),
             row![
                 text(encryption_status).size(12).color(colors.muted),
                 text_input("Password", &self.encryption_password)
                     .secure(true)
-                    .on_input(Message::EncryptionPasswordChanged)
+                    .on_input(|password| {
+                        Message::EncryptionPasswordChanged(Zeroizing::new(password))
+                    })
                     .width(Length::Fill),
                 button(text("Check").color(colors.text)).on_press(Message::CheckEncryption),
                 button(text(encryption_action).color(colors.text))
                     .on_press(Message::ApplyEncryption),
+                lock_button,
                 button(text("Remove All").color(colors.text)).on_press(Message::RemoveAllData),
             ]
             .spacing(8)

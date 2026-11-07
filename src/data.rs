@@ -7,6 +7,7 @@ use std::str::FromStr;
 
 use cryptainer::Cryptainer;
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, Zeroizing};
 
 // One income or expense saved in the ledger.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -30,6 +31,18 @@ pub(crate) struct VData {
     pub(crate) v_data: Vec<Data>,
 }
 
+impl VData {
+    pub(crate) fn zeroize_contents(&mut self) {
+        for transaction in &mut self.v_data {
+            transaction.d_name.zeroize();
+            transaction.d_type.zeroize();
+            transaction.d_amount.zeroize();
+            transaction.d_date.zeroize();
+        }
+        self.v_data.clear();
+    }
+}
+
 // App state for the ledger, form, and display settings.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct RScashM {
@@ -50,7 +63,7 @@ pub(crate) struct RScashM {
     // Date currently typed into the form.
     pub(crate) d_ui_date: String,
     #[serde(skip)]
-    pub(crate) encryption_password: String,
+    pub(crate) encryption_password: Zeroizing<String>,
     #[serde(skip)]
     pub(crate) is_encrypted: bool,
     #[serde(skip)]
@@ -198,9 +211,10 @@ pub(crate) enum Message {
     RemoveData(usize),
     // Remove every transaction.
     RemoveAllData,
-    EncryptionPasswordChanged(String),
+    EncryptionPasswordChanged(Zeroizing<String>),
     CheckEncryption,
     ApplyEncryption,
+    LockEncryption,
     // Update the transaction name input.
     NameChanged(String),
     // Update the transaction amount input.
